@@ -1,23 +1,25 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use chrono::{DateTime, Duration, Local};
+use device_query::DeviceQuery;
+use native_dialog::MessageType;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::rc::Rc;
-use chrono::{DateTime, Duration, Local};
-use native_dialog::MessageType;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
+use winit::dpi::PhysicalPosition;
+use winit::dpi::PhysicalSize;
 use winit::event::{Event, KeyEvent, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Fullscreen, WindowBuilder};
 use winit::window::CursorIcon;
-use winit::window::WindowLevel;
-use winit::dpi::PhysicalPosition;
-use winit::dpi::PhysicalSize;
-use winit::raw_window_handle::HasRawWindowHandle;
 use winit::window::Window;
+use winit::window::WindowLevel;
+use winit::window::{Fullscreen, WindowBuilder};
 
+const PROGRAM_NAME: &str = env!("CARGO_CRATE_NAME");
+const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// ProgramState represents what the program is doing related to rendering
 /// TakingBreak(time) is for when the program should be rendering the break overlay
@@ -40,44 +42,83 @@ fn main() {
 
     let tray_menu = Menu::new();
 
-
     let about_menu_item = MenuItem::new("About", true, None);
     let quit_menu_item = MenuItem::new("Quit", true, None);
 
+    tray_menu
+        .append_items(&[&about_menu_item, &quit_menu_item])
+        .unwrap();
 
-    tray_menu.append_items(&[&about_menu_item, &quit_menu_item]).unwrap();
+    let about_menu_text = String::from(format!("{} v{}", PROGRAM_NAME, PROGRAM_VERSION));
 
-    let about_menu_text = String::from(format!("{} v{}", env!("CARGO_CRATE_NAME"), env!("CARGO_PKG_VERSION")));
+    let mut tray_icon = Some(
+        TrayIconBuilder::new()
+            .with_menu(Box::new(tray_menu))
+            .with_tooltip("test tray menu tooltip")
+            .with_icon(
+                Icon::from_path(PathBuf::from("./assets/tray_ico.ico"), Some((128, 128))).unwrap(),
+            )
+            .build()
+            .unwrap(),
+    );
 
-    let mut tray_icon = Some(TrayIconBuilder::new().with_menu(Box::new(tray_menu))
-        .with_tooltip("test tray menu tooltip")
-        .with_icon(
-            Icon::from_path(
-                PathBuf::from(
-                    "./assets/tray_ico.ico"),
-                Some((128,128)))
-                .unwrap()
-        )
-        .build()
-        .unwrap());
+    let dq = device_query::device_state::DeviceState::new();
 
-    let mut last_redraw_time = Local::now();
-    let mut state = ProgramState::Working(Local::now());
-
+    // durations for program settings
     let break_gap_time = Duration::seconds(5);
     let break_length_time = Duration::seconds(2);
     let redraw_rate = Duration::seconds(1);
 
+    // shared state between loops for functionality
+    let mut state = ProgramState::Working(Local::now());
+    let mut previous_mouse_pos = dq.get_mouse().coords;
+    let mut last_mouse_moved_time = Local::now();
+    let mut last_key_pressed_time = Local::now();
+    let mut last_redraw_time = Local::now();
+
     event_loop
         .run(move |event, elwt| {
+            // boolean for if the mouse was moved during the duration of the break time
+            let mouse_moved = {
+                let dist = {
+                    let p1 = dq.get_mouse().coords;
+                    let p2 = previous_mouse_pos.clone();
+
+                    ((p2.1 - p1.1).pow(2) as f32 + (p2.0 - p1.0).pow(2) as f32).sqrt()
+                };
+
+                let significant_dist = dist > 1.0;
+
+                if significant_dist {
+                    last_mouse_moved_time = Local::now();
+                }
+
+                Local::now().signed_duration_since(&last_mouse_moved_time) < break_length_time
+            };
+
+            // boolean for if there are any pressed keys detected
+            let keys_pressed = {
+                if !dq.get_keys().is_empty() {
+                    last_key_pressed_time = Local::now();
+                }
+
+                Local::now().signed_duration_since(&last_key_pressed_time) < break_length_time
+            };
+
+            // boolean representing if there was any detected activity from the user
+            let user_activity_happened = keys_pressed || mouse_moved;
 
             elwt.set_control_flow(ControlFlow::Poll);
+
+            // tray event handler block
             {
                 let receiver = TrayIconEvent::receiver().try_recv();
                 if let Ok(tray_event) = receiver {
                     println!("{:?}", tray_event);
                 }
             }
+
+            // tray menu event handler block
             {
                 let receiver = MenuEvent::receiver().try_recv();
                 if let Ok(menu_event) = receiver {
@@ -86,22 +127,20 @@ fn main() {
                             .set_title("About")
                             .set_text(&about_menu_text)
                             .set_type(MessageType::Info);
+                        #[cfg(debug_assertions)]
                         println!("about menu clicked");
-
 
                         about_dialogue.show_alert().unwrap();
                     }
                     if menu_event.id == quit_menu_item.id() {
-
                         window.set_visible(false);
                         // drop the tray icon so it goes away properly -> https://github.com/zkxs/simple-crosshair-overlay/blob/master/src/main.rs
                         tray_icon.take();
                         elwt.exit();
-
+                        #[cfg(debug_assertions)]
                         println!("quit menu clicked");
-
                     }
-
+                    #[cfg(debug_assertions)]
                     println!("{:?}", menu_event);
                 }
             }
@@ -115,11 +154,9 @@ fn main() {
                         let size = window.inner_size();
                         (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
                     } {
-
                         // state switching logic
                         match &state {
                             ProgramState::TakingBreak(break_start_time) => {
-
                                 let diff = Local::now().signed_duration_since(break_start_time);
                                 #[cfg(debug_assertions)]
                                 println!("taking break {}", diff);
@@ -127,9 +164,13 @@ fn main() {
                                     state = ProgramState::Working(Local::now());
                                 }
 
+                                if user_activity_happened {
+                                    #[cfg(debug_assertions)]
+                                    println!("user activity happened, resetting break time...");
+                                    state = ProgramState::TakingBreak(Local::now());
+                                }
                             }
                             ProgramState::Working(working_start_time) => {
-
                                 let diff = Local::now().signed_duration_since(working_start_time);
                                 #[cfg(debug_assertions)]
                                 println!("taking working {}", diff);
@@ -190,6 +231,8 @@ fn main() {
                     }
                 }
             }
+
+            previous_mouse_pos = dq.get_mouse().coords;
         })
         .unwrap();
 }
@@ -201,23 +244,22 @@ fn init_window(event_loop: &EventLoop<()>) -> Window {
         .with_transparent(true)
         .with_decorations(false)
         .with_resizable(false)
-        .with_title("PROGRAM NAME")
+        .with_title(format!("{} v{}", PROGRAM_NAME, PROGRAM_VERSION))
         .with_position(PhysicalPosition::new(0, 0)) // can't determine monitor size until the window is created, so just use some dummy values
         .with_inner_size(PhysicalSize::new(1, 1)) // this might flicker so make it very tiny
         .with_active(false);
 
-    #[cfg(target_os = "windows")] let window_builder = {
+    #[cfg(target_os = "windows")]
+    let window_builder = {
         use winit::platform::windows::WindowBuilderExtWindows;
         window_builder
             .with_drag_and_drop(false)
             .with_skip_taskbar(true)
     };
 
-    let window = window_builder.build(event_loop)
-        .unwrap();
+    let window = window_builder.build(event_loop).unwrap();
 
-    window.set_outer_position(PhysicalPosition::new(0,0));
-
+    window.set_outer_position(PhysicalPosition::new(0, 0));
 
     window.set_fullscreen(Some(Fullscreen::Borderless(None)));
     // window.request_inner_size(PhysicalSize::new(1920,1080));
