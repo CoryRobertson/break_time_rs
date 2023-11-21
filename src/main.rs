@@ -32,6 +32,8 @@ enum ProgramState {
     Paused,
 }
 
+// TODO: switch to egui master branch cause it seems to work really good!
+
 const FULL_ALPHA: u32 = 0x00000000;
 
 fn main() {
