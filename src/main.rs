@@ -73,14 +73,14 @@ fn main() {
 
             elwt.set_control_flow(ControlFlow::Poll);
             {
-                let reciever = TrayIconEvent::receiver().try_recv();
-                if let Ok(tray_event) = reciever {
+                let receiver = TrayIconEvent::receiver().try_recv();
+                if let Ok(tray_event) = receiver {
                     println!("{:?}", tray_event);
                 }
             }
             {
-                let reciever = MenuEvent::receiver().try_recv();
-                if let Ok(menu_event) = reciever {
+                let receiver = MenuEvent::receiver().try_recv();
+                if let Ok(menu_event) = receiver {
                     if menu_event.id == about_menu_item.id() {
                         let about_dialogue = native_dialog::MessageDialog::new()
                             .set_title("About")
