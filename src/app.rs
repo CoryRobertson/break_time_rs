@@ -1,26 +1,51 @@
+use crate::app::options_screen::show_options_menu;
+use crate::state::ProgramState;
+use chrono::{DateTime, Duration, Local};
+use device_query::{DeviceQuery, DeviceState, Keycode, MousePosition};
+use eframe::{CreationContext, Frame, App};
+use egui::epaint::Shadow;
+use egui::load::Bytes;
+use egui::Pos2;
+use egui::{Color32, Context, Id, ImageSource, Stroke, Style, ViewportId, Visuals};
+use egui::ViewportBuilder;
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read;
-use crate::state::ProgramState;
-use chrono::{DateTime, Duration, Local};
-use device_query::{DeviceQuery, DeviceState, MousePosition};
-use eframe::{CreationContext, Frame};
-use egui::epaint::Shadow;
-use egui::{Color32, Context, ImageSource, Stroke, Style, Visuals};
-use egui::load::Bytes;
+use serde::Deserialize;
+use serde::Serialize;
 
+#[derive(Deserialize, Serialize, Debug)]
+#[serde(default)]
 pub struct BreakTimeApp {
+    #[serde(skip)]
     showing_options_menu: bool,
+    #[serde(skip)]
     program_state: ProgramState,
+    #[serde(skip)]
     device_query: DeviceState,
+    
+    break_gap_time_minutes: f32,
+    break_length_time_minutes: f32,
+
+    #[serde(skip)]
     break_gap_time: Duration,
+    #[serde(skip)]
     break_length_time: Duration,
+
+    #[serde(skip)]
     redraw_rate: Duration, // unused as of now
+
+    #[serde(skip)]
     last_key_pressed_time: DateTime<Local>,
+    #[serde(skip)]
     last_mouse_moved_time: DateTime<Local>,
+    #[serde(skip)]
     last_redraw_time: DateTime<Local>,
+    #[serde(skip)]
     previous_mouse_pos: MousePosition,
 }
+
+mod options_screen;
 
 /// The number which we divide the break length when checking for activity,
 /// we consider activity to be occurring if its `last activity time` < `break_length_time` / `BREAK_ACTIVITY_DIVISOR`
@@ -41,34 +66,53 @@ const BREAK_ACTIVITY_DIVISOR: i32 = 4;
 // let mut last_redraw_time = Local::now();
 
 impl BreakTimeApp {
-    pub fn new(_cc: &CreationContext) -> Self {
-        Self {
-            ..Default::default()
+    pub fn new(cc: &CreationContext<'_>) -> Self {
+
+        if let Some(storage) = cc.storage {
+            println!("aaaa {}", eframe::get_value::<Self>(storage, eframe::APP_KEY).unwrap().break_gap_time_minutes);
+            return eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
         }
+
+
+        Self::default()
     }
 }
 
 impl Default for BreakTimeApp {
     fn default() -> Self {
         Self {
+
             showing_options_menu: false,
+
             program_state: ProgramState::Working(Local::now()),
+
             device_query: DeviceState::new(),
+            break_gap_time_minutes: 55.0,
+            break_length_time_minutes: 5.0,
             break_gap_time: Duration::seconds(5),
             break_length_time: Duration::seconds(2),
             redraw_rate: Duration::seconds(1),
+
             last_key_pressed_time: Local::now(),
+
             last_mouse_moved_time: Local::now(),
+
             last_redraw_time: Local::now(),
+
             previous_mouse_pos: MousePosition::default(),
+
         }
     }
 }
 
 impl eframe::App for BreakTimeApp {
-    fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
+    fn update(&mut self, ctx: &Context, frame: &mut Frame) {
 
         egui_extras::install_image_loaders(ctx);
+
+        // TODO: get rid of this unwrap
+        self.break_gap_time = Duration::from_std(std::time::Duration::from_secs_f32(self.break_gap_time_minutes * 60.0)).unwrap();
+        self.break_length_time = Duration::from_std(std::time::Duration::from_secs_f32(self.break_length_time_minutes * 60.0)).unwrap();
 
         let clear_visuals = Visuals {
             dark_mode: false,
@@ -169,13 +213,19 @@ impl eframe::App for BreakTimeApp {
         };
 
         // boolean for if there are any pressed keys detected
-        let keys_pressed = {
-            if !self.device_query.get_keys().is_empty() {
+        let (keys_pressed, _keys) = {
+            let keys = self.device_query.get_keys();
+            if !keys.is_empty() {
                 self.last_key_pressed_time = Local::now();
+                if keys.contains(&Keycode::Slash) && keys.contains(&Keycode::BackSlash) {
+                    self.showing_options_menu = true;
+                }
             }
-
-            Local::now().signed_duration_since(&self.last_key_pressed_time)
-                < self.break_length_time / BREAK_ACTIVITY_DIVISOR
+            (
+                Local::now().signed_duration_since(&self.last_key_pressed_time)
+                    < self.break_length_time / BREAK_ACTIVITY_DIVISOR,
+                keys,
+            )
         };
 
         // boolean representing if there was any detected activity from the user
@@ -184,6 +234,31 @@ impl eframe::App for BreakTimeApp {
         // ctx.request_repaint_after(std::time::Duration::from_millis(self.redraw_rate.num_milliseconds() as u64 * 100));
 
         // sleep(core::time::Duration::from_millis(100));
+
+        if self.showing_options_menu {
+            ctx.set_visuals(Visuals::default());
+
+            if let Some(storage) = frame.storage_mut() {
+                self.save(storage);
+            }
+
+            ctx.show_viewport_immediate(
+                ViewportId(Id::from(1234.to_string())),
+                ViewportBuilder::default()
+                    .with_always_on_top()
+                    .with_active(true)
+                    .with_decorations(false)
+                    .with_visible(true)
+                    .with_position(Pos2::new(0.0, 0.0))
+                    .with_title("Options")
+                    .with_transparent(false),
+                |a, b| {
+                    egui::CentralPanel::default().show(a, |ui| {
+                        show_options_menu(ui, ctx, self,frame);
+                    });
+                },
+            );
+        }
 
         ctx.request_repaint();
 
@@ -195,21 +270,18 @@ impl eframe::App for BreakTimeApp {
         match &self.program_state {
             ProgramState::TakingBreak(break_start_time) => {
                 let diff = Local::now().signed_duration_since(break_start_time);
-                #[cfg(debug_assertions)]
-                println!("taking break {}", diff);
+
                 if diff >= self.break_length_time {
                     self.program_state = ProgramState::Working(Local::now());
                 }
 
                 if user_activity_happened {
-                    #[cfg(debug_assertions)]
-                    println!("user activity happened, resetting break time...");
                     self.program_state = ProgramState::TakingBreak(Local::now());
                 }
 
                 ctx.set_style(opaque_style.clone());
 
-                egui::CentralPanel::default().show(&ctx, |ui| {
+                egui::CentralPanel::default().show(ctx, |ui| {
                     // overlay for when a break is occurring
                     // let (width, height) = (
                     //     ui.ctx().screen_rect().width(),
@@ -229,14 +301,18 @@ impl eframe::App for BreakTimeApp {
                     // );
 
                     // let the user specify their own overlay if they want to
+
+                    // TODO: overlay some text displaying how long till the break is over ??
+
                     if let Ok(mut file) = File::open("./overlay.png") {
+
                         let img = ImageSource::Bytes {
                             uri: Cow::from("bytes://overlay.png"),
                             bytes: {
                                 let mut v = vec![];
                                 file.read_to_end(&mut v).expect("TODO: panic message");
                                 Bytes::from(v)
-                            }
+                            },
                         };
                         ui.image(img);
                     } else {
@@ -246,16 +322,12 @@ impl eframe::App for BreakTimeApp {
             }
             ProgramState::Working(working_start_time) => {
                 let diff = Local::now().signed_duration_since(working_start_time);
-                #[cfg(debug_assertions)]
-                println!("taking working {}", diff);
+
                 if diff >= self.break_gap_time {
                     self.program_state = ProgramState::TakingBreak(Local::now());
                 }
             }
-            ProgramState::Paused => {
-                #[cfg(debug_assertions)]
-                println!("taking paused");
-            }
+            ProgramState::Paused => {}
         }
 
         // egui::TopBottomPanel::top("top panel!").show(&ctx, |ui| {
@@ -263,5 +335,9 @@ impl eframe::App for BreakTimeApp {
         // });
 
         self.previous_mouse_pos = self.device_query.get_mouse().coords;
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, eframe::APP_KEY, self);
     }
 }

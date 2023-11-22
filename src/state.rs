@@ -5,6 +5,7 @@ use chrono::{DateTime, Local};
 /// Working(time) is for when the program should not be overlaying anything
 ///
 /// Date time inside represents the time that this break started
+#[derive(Debug)]
 pub enum ProgramState {
     TakingBreak(DateTime<Local>),
     Working(DateTime<Local>),

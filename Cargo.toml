@@ -6,16 +6,22 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-egui = "0.23.0"
-eframe = "0.23.0"
+egui = { version = "0.23.0"}
+eframe = { version = "0.23.0", features = ["serde","persistence", "glow","default_fonts"]}
 egui_extras = { version = "0.23.0", features = ["file","image","svg"] }
 image = { version = "0.24.7", features = [] }
 #softbuffer = "^0.4.0"
-#winit = "^0.29.3"
-chrono = "0.4.31"
+winit = "^0.28.7"
+serde = "1.0.193"
+chrono = { version = "0.4.31", features = ["serde"]}
 device_query = "1.1.3"
 tray-icon = "0.11.0"
 native-dialog = "0.7.0"
+
+[profile.release]
+opt-level = 3
+strip = true
+lto = true
 
 [patch.crates-io]
 

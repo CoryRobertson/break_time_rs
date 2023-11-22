@@ -17,6 +17,8 @@ mod state;
 
 mod constants;
 
+pub const WINDOW_LEVEL: WindowLevel = WindowLevel::AlwaysOnTop;
+
 fn main() {
     let native_options = NativeOptions {
         viewport: ViewportBuilder {
