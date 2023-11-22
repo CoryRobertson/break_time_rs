@@ -1,16 +1,12 @@
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read;
-use crate::color_settings::{get_overlay_color, get_overlay_text_color};
-use crate::constants::OVERLAY_RADIUS;
 use crate::state::ProgramState;
 use chrono::{DateTime, Duration, Local};
 use device_query::{DeviceQuery, DeviceState, MousePosition};
 use eframe::{CreationContext, Frame};
 use egui::epaint::Shadow;
-use egui::{Align2, Color32, Context, FontFamily, FontId, ImageSource, Pos2, Stroke, Style, Ui, Visuals};
-use std::thread::sleep;
-use eframe::emath::Rect;
+use egui::{Color32, Context, ImageSource, Stroke, Style, Visuals};
 use egui::load::Bytes;
 
 pub struct BreakTimeApp {
@@ -27,7 +23,7 @@ pub struct BreakTimeApp {
 }
 
 /// The number which we divide the break length when checking for activity,
-/// we consider activity to be occuring if its `last activity time` < `break_length_time` / `BREAK_ACTIVITY_DIVISOR`
+/// we consider activity to be occurring if its `last activity time` < `break_length_time` / `BREAK_ACTIVITY_DIVISOR`
 const BREAK_ACTIVITY_DIVISOR: i32 = 4;
 
 // let dq = device_query::device_state::DeviceState::new();
@@ -39,13 +35,13 @@ const BREAK_ACTIVITY_DIVISOR: i32 = 4;
 //
 // // shared state between loops for functionality
 // let mut state = ProgramState::Working(Local::now());
-// let mut previous_mouse_pos = dq.get_mouse().coords;
+// let mut previous_mouse_pos = dq.get_mouse().cords;
 // let mut last_mouse_moved_time = Local::now();
 // let mut last_key_pressed_time = Local::now();
 // let mut last_redraw_time = Local::now();
 
 impl BreakTimeApp {
-    pub fn new(cc: &CreationContext) -> Self {
+    pub fn new(_cc: &CreationContext) -> Self {
         Self {
             ..Default::default()
         }
@@ -70,7 +66,7 @@ impl Default for BreakTimeApp {
 }
 
 impl eframe::App for BreakTimeApp {
-    fn update(&mut self, ctx: &Context, frame: &mut Frame) {
+    fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
 
         egui_extras::install_image_loaders(ctx);
 
@@ -262,7 +258,7 @@ impl eframe::App for BreakTimeApp {
             }
         }
 
-        // egui::TopBottomPanel::top("top pannel!").show(&ctx, |ui| {
+        // egui::TopBottomPanel::top("top panel!").show(&ctx, |ui| {
         //     ui.heading("this is text!!");
         // });
 
