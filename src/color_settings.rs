@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use egui::Color32;
 
 pub fn get_overlay_color() -> Color32 {

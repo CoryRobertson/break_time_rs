@@ -1,18 +1,17 @@
 use crate::app::options_screen::show_options_menu;
+use crate::app::overlay_screen::show_overlay_screen;
 use crate::state::ProgramState;
 use chrono::{DateTime, Duration, Local};
 use device_query::{DeviceQuery, DeviceState, Keycode, MousePosition};
-use eframe::{CreationContext, Frame, App};
+use eframe::{CreationContext, Frame};
 use egui::epaint::Shadow;
-use egui::load::Bytes;
 use egui::Pos2;
-use egui::{Color32, Context, Id, ImageSource, Stroke, Style, ViewportId, Visuals};
 use egui::ViewportBuilder;
-use std::borrow::Cow;
-use std::fs::File;
-use std::io::Read;
+use egui::{Color32, Context, Id, Stroke, Style, ViewportId, Visuals};
 use serde::Deserialize;
 use serde::Serialize;
+use std::fs::File;
+use std::io::Read;
 
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(default)]
@@ -23,9 +22,14 @@ pub struct BreakTimeApp {
     program_state: ProgramState,
     #[serde(skip)]
     device_query: DeviceState,
-    
+
     break_gap_time_minutes: f32,
     break_length_time_minutes: f32,
+    display_break_timer: bool,
+    enable_notification: bool,
+
+    #[serde(skip)]
+    overridden_overlay_image: Option<Vec<u8>>,
 
     #[serde(skip)]
     break_gap_time: Duration,
@@ -47,32 +51,17 @@ pub struct BreakTimeApp {
 
 mod options_screen;
 
+mod overlay_screen;
+
 /// The number which we divide the break length when checking for activity,
 /// we consider activity to be occurring if its `last activity time` < `break_length_time` / `BREAK_ACTIVITY_DIVISOR`
-const BREAK_ACTIVITY_DIVISOR: i32 = 4;
-
-// let dq = device_query::device_state::DeviceState::new();
-//
-// // durations for program settings
-// let break_gap_time = Duration::seconds(5);
-// let break_length_time = Duration::seconds(2);
-// let redraw_rate = Duration::seconds(1);
-//
-// // shared state between loops for functionality
-// let mut state = ProgramState::Working(Local::now());
-// let mut previous_mouse_pos = dq.get_mouse().cords;
-// let mut last_mouse_moved_time = Local::now();
-// let mut last_key_pressed_time = Local::now();
-// let mut last_redraw_time = Local::now();
+const BREAK_ACTIVITY_DIVISOR: i32 = 60;
 
 impl BreakTimeApp {
     pub fn new(cc: &CreationContext<'_>) -> Self {
-
         if let Some(storage) = cc.storage {
-            println!("aaaa {}", eframe::get_value::<Self>(storage, eframe::APP_KEY).unwrap().break_gap_time_minutes);
             return eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
         }
-
 
         Self::default()
     }
@@ -81,14 +70,26 @@ impl BreakTimeApp {
 impl Default for BreakTimeApp {
     fn default() -> Self {
         Self {
-
             showing_options_menu: false,
 
-            program_state: ProgramState::Working(Local::now()),
+            program_state: ProgramState::Working(Option::from(Local::now())),
 
             device_query: DeviceState::new(),
             break_gap_time_minutes: 55.0,
             break_length_time_minutes: 5.0,
+            display_break_timer: true,
+            enable_notification: false,
+            overridden_overlay_image: {
+                File::open("./overlay.png")
+                    .ok()
+                    .map(|file| (vec![], file))
+                    .and_then(
+                        |(mut v, mut file): (Vec<u8>, File)| match file.read_to_end(&mut v) {
+                            Ok(_) => Some(v),
+                            Err(_) => None,
+                        },
+                    )
+            },
             break_gap_time: Duration::seconds(5),
             break_length_time: Duration::seconds(2),
             redraw_rate: Duration::seconds(1),
@@ -100,19 +101,23 @@ impl Default for BreakTimeApp {
             last_redraw_time: Local::now(),
 
             previous_mouse_pos: MousePosition::default(),
-
         }
     }
 }
 
 impl eframe::App for BreakTimeApp {
     fn update(&mut self, ctx: &Context, frame: &mut Frame) {
-
         egui_extras::install_image_loaders(ctx);
 
         // TODO: get rid of this unwrap
-        self.break_gap_time = Duration::from_std(std::time::Duration::from_secs_f32(self.break_gap_time_minutes * 60.0)).unwrap();
-        self.break_length_time = Duration::from_std(std::time::Duration::from_secs_f32(self.break_length_time_minutes * 60.0)).unwrap();
+        self.break_gap_time = Duration::from_std(std::time::Duration::from_secs_f32(
+            self.break_gap_time_minutes * 60.0,
+        ))
+        .unwrap();
+        self.break_length_time = Duration::from_std(std::time::Duration::from_secs_f32(
+            self.break_length_time_minutes * 60.0,
+        ))
+        .unwrap();
 
         let clear_visuals = Visuals {
             dark_mode: false,
@@ -149,7 +154,6 @@ impl eframe::App for BreakTimeApp {
             interaction: Default::default(),
             visuals: clear_visuals.clone(),
             animation_time: 0.0,
-            debug: Default::default(),
             explanation_tooltips: false,
             ..Default::default()
         };
@@ -189,7 +193,6 @@ impl eframe::App for BreakTimeApp {
             interaction: Default::default(),
             visuals: opaque_visuals.clone(),
             animation_time: 0.0,
-            debug: Default::default(),
             explanation_tooltips: false,
             ..Default::default()
         };
@@ -197,7 +200,7 @@ impl eframe::App for BreakTimeApp {
         let mouse_moved = {
             let dist = {
                 let p1 = self.device_query.get_mouse().coords;
-                let p2 = self.previous_mouse_pos.clone();
+                let p2 = self.previous_mouse_pos;
 
                 ((p2.1 - p1.1).pow(2) as f32 + (p2.0 - p1.0).pow(2) as f32).sqrt()
             };
@@ -208,7 +211,7 @@ impl eframe::App for BreakTimeApp {
                 self.last_mouse_moved_time = Local::now();
             }
 
-            Local::now().signed_duration_since(&self.last_mouse_moved_time)
+            Local::now().signed_duration_since(self.last_mouse_moved_time)
                 < self.break_length_time / BREAK_ACTIVITY_DIVISOR
         };
 
@@ -222,7 +225,7 @@ impl eframe::App for BreakTimeApp {
                 }
             }
             (
-                Local::now().signed_duration_since(&self.last_key_pressed_time)
+                Local::now().signed_duration_since(self.last_key_pressed_time)
                     < self.break_length_time / BREAK_ACTIVITY_DIVISOR,
                 keys,
             )
@@ -230,10 +233,6 @@ impl eframe::App for BreakTimeApp {
 
         // boolean representing if there was any detected activity from the user
         let user_activity_happened = keys_pressed || mouse_moved;
-
-        // ctx.request_repaint_after(std::time::Duration::from_millis(self.redraw_rate.num_milliseconds() as u64 * 100));
-
-        // sleep(core::time::Duration::from_millis(100));
 
         if self.showing_options_menu {
             ctx.set_visuals(Visuals::default());
@@ -252,9 +251,9 @@ impl eframe::App for BreakTimeApp {
                     .with_position(Pos2::new(0.0, 0.0))
                     .with_title("Options")
                     .with_transparent(false),
-                |a, b| {
+                |a, _b| {
                     egui::CentralPanel::default().show(a, |ui| {
-                        show_options_menu(ui, ctx, self,frame);
+                        show_options_menu(ui, ctx, self, frame);
                     });
                 },
             );
@@ -272,7 +271,14 @@ impl eframe::App for BreakTimeApp {
                 let diff = Local::now().signed_duration_since(break_start_time);
 
                 if diff >= self.break_length_time {
-                    self.program_state = ProgramState::Working(Local::now());
+                    self.program_state = ProgramState::Working(None);
+                    if self.enable_notification {
+                        notify_rust::Notification::new()
+                            .summary("Work time!")
+                            .body("Break is over :)")
+                            .show()
+                            .unwrap();
+                    }
                 }
 
                 if user_activity_happened {
@@ -282,52 +288,30 @@ impl eframe::App for BreakTimeApp {
                 ctx.set_style(opaque_style.clone());
 
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    // overlay for when a break is occurring
-                    // let (width, height) = (
-                    //     ui.ctx().screen_rect().width(),
-                    //     ui.ctx().screen_rect().height(),
-                    // );
-                    // ui.painter().text(
-                    //     Pos2::new(width / 2.0, height / 4.0),
-                    //     Align2::CENTER_CENTER,
-                    //     "TAKE A BREAK",
-                    //     FontId::new(60.0, FontFamily::Proportional),
-                    //     get_overlay_text_color(),
-                    // );
-                    // ui.painter().circle_filled(
-                    //     Pos2::new(width / 2.0, height / 2.0),
-                    //     OVERLAY_RADIUS,
-                    //     get_overlay_color(),
-                    // );
-
-                    // let the user specify their own overlay if they want to
-
-                    // TODO: overlay some text displaying how long till the break is over ??
-
-                    if let Ok(mut file) = File::open("./overlay.png") {
-
-                        let img = ImageSource::Bytes {
-                            uri: Cow::from("bytes://overlay.png"),
-                            bytes: {
-                                let mut v = vec![];
-                                file.read_to_end(&mut v).expect("TODO: panic message");
-                                Bytes::from(v)
-                            },
-                        };
-                        ui.image(img);
-                    } else {
-                        ui.image(egui::include_image!("../assets/overlay.png"));
-                    }
+                    show_overlay_screen(ui, ctx, self, frame);
                 });
             }
-            ProgramState::Working(working_start_time) => {
-                let diff = Local::now().signed_duration_since(working_start_time);
-
-                if diff >= self.break_gap_time {
-                    self.program_state = ProgramState::TakingBreak(Local::now());
+            ProgramState::Working(working_start_time_opt) => match working_start_time_opt {
+                None => {
+                    if user_activity_happened {
+                        self.program_state = ProgramState::Working(Some(Local::now()));
+                    }
                 }
-            }
-            ProgramState::Paused => {}
+                Some(working_start_time) => {
+                    let diff = Local::now().signed_duration_since(working_start_time);
+
+                    if diff >= self.break_gap_time {
+                        self.program_state = ProgramState::TakingBreak(Local::now());
+                        if self.enable_notification {
+                            notify_rust::Notification::new()
+                                .summary("Break time!")
+                                .body("Time to take a break :)")
+                                .show()
+                                .unwrap();
+                        }
+                    }
+                }
+            },
         }
 
         // egui::TopBottomPanel::top("top panel!").show(&ctx, |ui| {
