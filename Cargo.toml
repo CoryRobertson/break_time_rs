@@ -22,9 +22,3 @@ tray-icon = "0.11.0"
 opt-level = 3
 strip = true
 lto = true
-
-
-#[patch.crates-io]
-#egui = { path = "./egui/crates/egui" }
-#eframe = { path = "./egui/crates/eframe" }
-#egui_extras = { path = "./egui/crates/egui_extras" }

@@ -36,7 +36,6 @@ fn main() {
             window_level: Option::from(WindowLevel::AlwaysOnTop),
             mouse_passthrough: Some(true),
             ..Default::default()
-
         },
         persist_window: false,
         follow_system_theme: false,
