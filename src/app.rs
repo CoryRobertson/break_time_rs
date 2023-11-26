@@ -324,4 +324,8 @@ impl eframe::App for BreakTimeApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, self);
     }
+
+    fn clear_color(&self, _visuals: &Visuals) -> [f32; 4] {
+        _visuals.panel_fill.to_normalized_gamma_f32()
+    }
 }

@@ -1,3 +1,0 @@
-[submodule "egui"]
-	path = egui
-	url = https://github.com/CoryRobertson/egui.git
